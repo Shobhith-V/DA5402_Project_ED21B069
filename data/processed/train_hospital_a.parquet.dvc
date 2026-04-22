@@ -1,0 +1,5 @@
+outs:
+- md5: 230a8cebb02ba2b1d2ac3fce297fbe8b
+  size: 6918365
+  hash: md5
+  path: train_hospital_a.parquet

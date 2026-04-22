@@ -1,0 +1,5 @@
+outs:
+- md5: 3babc3942af6086026fff2d594aaa961
+  size: 16066
+  hash: md5
+  path: hospital_a_baseline.json

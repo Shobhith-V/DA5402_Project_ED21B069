@@ -1,0 +1,5 @@
+outs:
+- md5: 0a7e6c5ff98a618ce027672b992ea684
+  size: 7640294
+  hash: md5
+  path: hospital_B.parquet

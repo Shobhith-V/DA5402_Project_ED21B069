@@ -1,0 +1,6 @@
+outs:
+- md5: 6b49408e3e37bc83daa3dd803dc32c15.dir
+  size: 123668780
+  nfiles: 20000
+  hash: md5
+  path: hospital_B

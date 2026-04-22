@@ -1,0 +1,63 @@
+{
+  "scale_pos_weight": 45.11,
+  "vital_cols": [
+    "HR",
+    "O2Sat",
+    "Temp",
+    "SBP",
+    "MAP",
+    "DBP",
+    "Resp"
+  ],
+  "lab_cols": [
+    "BaseExcess",
+    "HCO3",
+    "FiO2",
+    "pH",
+    "PaCO2",
+    "SaO2",
+    "AST",
+    "BUN",
+    "Alkalinephos",
+    "Calcium",
+    "Chloride",
+    "Creatinine",
+    "Bilirubin_direct",
+    "Glucose",
+    "Lactate",
+    "Magnesium",
+    "Phosphate",
+    "Potassium",
+    "Bilirubin_total",
+    "TroponinI",
+    "Hct",
+    "Hgb",
+    "PTT",
+    "WBC",
+    "Fibrinogen",
+    "Platelets"
+  ],
+  "target_col": "SepsisLabel",
+  "patient_id_col": "patient_id",
+  "drift_threshold": 0.05,
+  "min_ks_window": 500,
+  "min_confirmed_pool_for_retrain": 1000,
+  "recall_alert_threshold": 0.85,
+  "flag_rate_alert_threshold": 0.05,
+  "demo_cols": [
+    "Age",
+    "Gender",
+    "Unit1",
+    "Unit2",
+    "HospAdmTime",
+    "ICULOS"
+  ],
+  "drop_cols": [
+    "EtCO2"
+  ],
+  "meta_cols": [
+    "patient_id",
+    "hospital",
+    "SepsisLabel"
+  ]
+}
