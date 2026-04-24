@@ -1,0 +1,37 @@
+FROM python:3.10-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python dependencies first
+# (separate layer so pip install is cached when code changes)
+COPY requirements_api.txt .
+RUN pip install --no-cache-dir -r requirements_api.txt
+
+# Copy source code
+COPY src/ ./src/
+COPY data/baseline/ ./data/baseline/
+
+# Copy config
+COPY src/config.json ./src/config.json
+
+# Create directories that the app writes to at runtime
+RUN mkdir -p data/confirmed data/processed
+
+# Expose port
+EXPOSE 8000
+
+# Health check — Docker uses this to know when container is ready
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Start the API
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

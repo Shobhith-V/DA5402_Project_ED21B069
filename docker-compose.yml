@@ -1,0 +1,159 @@
+
+networks:
+  sepsis-net:
+    driver: bridge
+
+volumes:
+  mlflow-data:
+  airflow-db:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  # ── 1. FastAPI inference service ──────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: sepsis-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+    volumes:
+      # Mount data at runtime so confirmed pool persists
+      - ./data/confirmed:/app/data/confirmed
+      - ./data/processed:/app/data/processed
+    depends_on:
+      - mlflow
+      - prometheus
+        
+    networks:
+      - sepsis-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── 2. MLflow tracking server + model registry ────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.9.2
+    container_name: sepsis-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+      - ./mlruns:/mlflow/artifacts
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    networks:
+      - sepsis-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── 3. Airflow ────────────────────────────────────────────────
+  airflow:
+    image: apache/airflow:2.8.0-python3.10
+    container_name: sepsis-airflow
+    ports:
+      - "8080:8080"
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./src:/opt/airflow/src
+      - airflow-db:/opt/airflow
+    command: >
+      bash -c "
+        pip install pandas scipy pyarrow numpy --quiet &&
+        airflow db init &&
+        airflow users create
+          --username admin --password admin
+          --firstname Sepsis --lastname Watch
+          --role Admin --email admin@local || true &&
+        airflow scheduler &
+        airflow webserver --port 8080
+      "
+    networks:
+      - sepsis-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
+  # ── 4. Prometheus ─────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.48.1
+    container_name: sepsis-prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - sepsis-net
+    restart: unless-stopped
+
+  # ── 5. Grafana ────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: sepsis-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - sepsis-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ── 6. Node Exporter (infrastructure metrics) ─────────────────
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: sepsis-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.rootfs=/rootfs"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    networks:
+      - sepsis-net
+    restart: unless-stopped
