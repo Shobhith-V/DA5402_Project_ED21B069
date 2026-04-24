@@ -44,7 +44,8 @@ CONFIG   = ROOT / "src" / "config.json"
 
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 EXPERIMENT_NAME     = "sepsis-watch"
-
+os.environ["MLFLOW_TRACKING_URI"] = "http://localhost:5000"
+os.environ["MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD"] = "true"
 
 def load_config():
     with open(CONFIG) as f:
