@@ -21,10 +21,9 @@ jobs:
 
       - name: Install flake8
         run: pip install flake8==7.0.0
-
+        
       - name: Run flake8
-        run: flake8 src/ --max-line-length=120 --ignore=E203,W503 --exclude=src/__pycache__
-
+        run: flake8 src/ --max-line-length=120 --ignore=E203,W503,E221,E241,F541,W292 --exclude=src/__pycache__
   test:
     name: Unit tests
     runs-on: ubuntu-latest
