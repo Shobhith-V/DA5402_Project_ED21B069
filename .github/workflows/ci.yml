@@ -45,7 +45,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pytest numpy pandas scipy scikit-learn
+          pip install pytest numpy pandas scipy scikit-learn pyarrow
 
       - name: Run tests
         run: pytest tests/ -v
