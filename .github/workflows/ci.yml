@@ -1,0 +1,72 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install flake8
+        run: pip install flake8==7.0.0
+
+      - name: Run flake8
+        run: flake8 src/ --max-line-length=120 --ignore=E203,W503 --exclude=src/__pycache__
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest numpy pandas scipy scikit-learn
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  build-api:
+    name: Build API Docker image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.api
+          push: false
+          tags: sepsis-watch-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
