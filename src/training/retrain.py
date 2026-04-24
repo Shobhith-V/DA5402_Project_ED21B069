@@ -231,7 +231,9 @@ def retrain():
         "n_jobs":           -1,
     }
 
-    with mlflow.start_run(run_name=f"retrain-{git_hash}") as run:
+    pool_size = len(pool) if pool is not None else 0
+    run_name = f"retrain-HospA+B-pool{pool_size}-{git_hash[:6]}"
+    with mlflow.start_run(run_name=run_name) as run:
 
         # Log params
         mlflow.log_params(params)

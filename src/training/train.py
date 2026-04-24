@@ -175,7 +175,7 @@ def train():
         "n_jobs":           -1,
     }
 
-    with mlflow.start_run(run_name=f"train-{git_hash}") as run:
+    with mlflow.start_run(run_name=f"initial-train-HospA-{git_hash[:6]}") as run:
 
         # ── Log parameters ────────────────────────────────────────
         mlflow.log_params(params)
