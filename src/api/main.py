@@ -19,8 +19,9 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict, deque
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -44,12 +45,12 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────
-ROOT         = Path(__file__).parent.parent.parent
-CONFIG       = ROOT / "src" / "config.json"
-BASELINE     = ROOT / "data" / "baseline"
-CONFIRMED    = ROOT / "data" / "confirmed"
-PRED_LOG     = CONFIRMED / "prediction_log.jsonl"
-POOL_PATH    = CONFIRMED / "hospital_B_confirmed.parquet"
+ROOT      = Path(__file__).parent.parent.parent
+CONFIG    = ROOT / "src" / "config.json"
+BASELINE  = ROOT / "data" / "baseline"
+CONFIRMED = ROOT / "data" / "confirmed"
+PRED_LOG  = CONFIRMED / "prediction_log.jsonl"
+POOL_PATH = CONFIRMED / "hospital_B_confirmed.parquet"
 
 CONFIRMED.mkdir(parents=True, exist_ok=True)
 
@@ -63,10 +64,13 @@ with open(BASELINE / "feature_cols.json") as f:
 with open(BASELINE / "hospital_a_baseline.json") as f:
     BASELINE_STATS = json.load(f)
 
-# ── Prometheus ML metrics ──────────────────────────────────────────
-# These are the custom ML metrics — the ones that matter for your
-# project. API metrics (latency, throughput) come from Instrumentator.
+# ── Patient history buffer ─────────────────────────────────────────
+# Stores last 6 rows per patient to compute rolling statistics.
+# Without history, rolling mean = current value (no trend signal).
+# With history, model gets the temporal patterns it was trained on.
+_patient_history = defaultdict(lambda: deque(maxlen=6))
 
+# ── Prometheus metrics ─────────────────────────────────────────────
 RISK_SCORE = Gauge(
     "sepsis_risk_score",
     "Most recent risk score",
@@ -115,24 +119,17 @@ _model_ready = False
 
 
 def load_model():
-    """
-    Load model from local file saved during training.
-    In Docker this loads from the MLflow model server instead.
-    For local development, load directly from the saved JSON.
-    """
     global _model, _model_ready
     try:
         model_path = BASELINE / "model_local.json"
         if not model_path.exists():
-            log.error(f"Model file not found at {model_path}")
+            log.error(f"Model not found at {model_path}")
             log.error("Run src/training/train.py first")
             return
-
         _model = xgb.XGBClassifier()
         _model.load_model(str(model_path))
         _model_ready = True
         log.info(f"Model loaded from {model_path}")
-
     except Exception as e:
         log.error(f"Model load failed: {e}")
         _model_ready = False
@@ -145,7 +142,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS — allows React frontend (separate Docker service) to call API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -153,34 +149,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auto-instrument API metrics — request count, latency histogram
 Instrumentator().instrument(app).expose(app)
 
 
-# ── Request / response schemas ─────────────────────────────────────
+# ── Request schema ─────────────────────────────────────────────────
+# extra="allow" accepts all 77 engineered features dynamically.
+# We don't list them all explicitly — feature_cols.json defines
+# the exact set and order the model expects.
 class PatientRow(BaseModel):
-    patient_id:   str
-    HR:           Optional[float] = None
-    O2Sat:        Optional[float] = None
-    Temp:         Optional[float] = None
-    SBP:          Optional[float] = None
-    MAP:          Optional[float] = None
-    DBP:          Optional[float] = None
-    Resp:         Optional[float] = None
-    Age:          Optional[float] = None
-    Gender:       Optional[float] = None
-    Unit1:        Optional[float] = None
-    Unit2:        Optional[float] = None
-    ICULOS:       Optional[int]   = None
-    HospAdmTime:  Optional[float] = None
-    # Lab values — most will be None (not drawn this hour)
-    Lactate:      Optional[float] = None
-    Glucose:      Optional[float] = None
-    Creatinine:   Optional[float] = None
-    WBC:          Optional[float] = None
-    Platelets:    Optional[float] = None
-    # Ground truth — present in replay, absent in real deployment
-    SepsisLabel:  Optional[int]   = None
+    model_config = {"extra": "allow"}
+    patient_id:  str
+    SepsisLabel: Optional[int] = None
 
 
 class PredictionResponse(BaseModel):
@@ -203,13 +182,11 @@ async def startup():
 # ── Health and readiness ───────────────────────────────────────────
 @app.get("/health", tags=["ops"])
 def health():
-    """Liveness — is the container running?"""
     return {"status": "ok", "timestamp": time.time()}
 
 
 @app.get("/ready", tags=["ops"])
 def ready():
-    """Readiness — is the model loaded and ready to serve?"""
     if not _model_ready:
         raise HTTPException(status_code=503, detail="Model not loaded")
     return {"status": "ready", "model": "sepsis-watch-classifier"}
@@ -221,47 +198,57 @@ def predict(row: PatientRow):
     if not _model_ready:
         raise HTTPException(status_code=503, detail="Model not ready")
 
-    # Build feature vector from incoming row
-    row_dict = row.dict(exclude={"patient_id", "SepsisLabel"})
+    # Extract all fields — PatientRow accepts any extra fields
+    # Extract all fields from request
+    row_dict = row.model_dump()
+    row_dict.pop("patient_id", None)
+    label = row_dict.pop("SepsisLabel", None)
 
-    # Add missingness indicators for lab columns
-    # These are features the model was trained on
-    for col in CFG["lab_cols"]:
-        row_dict[f"{col}_drawn"] = 1 if row_dict.get(col) is not None else 0
+    # Check what we actually received
+    roll_features_received = {k:v for k,v in row_dict.items() if 'roll' in k}
+    log.info(f"Rolling features in request: {len(roll_features_received)}")
 
-    # Add rolling stats — we approximate with current value
-    # In production these would come from a sliding window buffer
-    # For the demo, rolling mean = current value (window of 1)
+    # Update history buffer
+    _patient_history[row.patient_id].append(row_dict.copy())
+    history = list(_patient_history[row.patient_id])
+
+    # Only compute rolling stats if NOT already in payload
     for col in CFG["vital_cols"]:
-        val = row_dict.get(col, 0) or 0
-        row_dict[f"{col}_roll_mean"] = val
-        row_dict[f"{col}_roll_std"]  = 0.0
+        if f"{col}_roll_mean" not in row_dict:
+            vals = [h.get(col) for h in history if h.get(col) is not None]
+            row_dict[f"{col}_roll_mean"] = float(np.mean(vals)) if vals else 0.0
+            row_dict[f"{col}_roll_std"]  = float(np.std(vals)) if len(vals) > 1 else 0.0
 
-    # Build DataFrame aligned to training feature order
+    # Only compute drawn indicators if NOT already in payload
+    for col in CFG["lab_cols"]:
+        if f"{col}_drawn" not in row_dict:
+            row_dict[f"{col}_drawn"] = 1 if row_dict.get(col) is not None else 0
+
+    # Build DataFrame aligned to training order
     feature_df = pd.DataFrame([row_dict])
     for col in FEATURE_COLS:
         if col not in feature_df.columns:
             feature_df[col] = 0
     feature_df = feature_df[FEATURE_COLS].fillna(0)
 
-    # Inference — timed for Prometheus
+    # Inference — timed for Prometheus histogram
     t0         = time.time()
     risk_score = float(_model.predict_proba(feature_df)[0, 1])
     INFERENCE_LATENCY.observe(time.time() - t0)
 
     # Risk tier
-    if risk_score >= 0.7:
+    if risk_score >= 0.3:
         risk_tier = "high"
-    elif risk_score >= 0.4:
+    elif risk_score >= 0.1:
         risk_tier = "medium"
     else:
         risk_tier = "low"
 
-    # Update Prometheus metrics
+    # Update Prometheus
     RISK_SCORE.labels(patient_id=row.patient_id).set(risk_score)
     PREDICTIONS_TOTAL.labels(risk_tier=risk_tier).inc()
 
-    # Top contributing features — deviation from baseline mean
+    # Top contributing features — deviation from baseline
     top_features = []
     for col in CFG["vital_cols"]:
         val = row_dict.get(col)
@@ -271,7 +258,7 @@ def predict(row: PatientRow):
             contribution = abs(val - mean) / std
             top_features.append({
                 "name":         col,
-                "value":        val,
+                "value":        round(float(val), 2),
                 "contribution": round(contribution, 3)
             })
     top_features = sorted(
@@ -284,8 +271,9 @@ def predict(row: PatientRow):
         "timestamp":   time.time(),
         "risk_score":  risk_score,
         "risk_tier":   risk_tier,
-        "sepsis_label": row.SepsisLabel,
-        "features":    row_dict,
+        "sepsis_label": label,
+        "features":    {k: float(v) if isinstance(v, (int, float)) else v
+                       for k, v in row_dict.items()},
     }
     with open(PRED_LOG, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
@@ -294,7 +282,7 @@ def predict(row: PatientRow):
         patient_id   = row.patient_id,
         risk_score   = round(risk_score, 4),
         risk_tier    = risk_tier,
-        flagged      = risk_score >= 0.7,
+        flagged      = risk_score >= 0.3,
         top_features = top_features,
         timestamp    = time.time(),
     )
@@ -303,27 +291,25 @@ def predict(row: PatientRow):
 # ── Background jobs ────────────────────────────────────────────────
 def feedback_loop():
     """
-    Compares logged predictions against revealed SepsisLabel.
+    Compares predictions against SepsisLabel ground truth.
     Updates rolling recall and precision Prometheus metrics.
-    Accumulates confirmed Hospital B rows for retraining pool.
+    Accumulates confirmed rows for retraining pool.
     Runs every 5 minutes.
     """
     try:
         if not PRED_LOG.exists():
             return
 
-        lines = PRED_LOG.read_text().strip().split("\n")
+        lines   = PRED_LOG.read_text().strip().split("\n")
         entries = [json.loads(l) for l in lines if l.strip()]
 
-        # Only entries where ground truth is known
         labelled = [e for e in entries if e.get("sepsis_label") is not None]
         if len(labelled) < 50:
             return
 
-        # Rolling window — last 1000 labelled entries
         window = labelled[-1000:]
         y_true = np.array([e["sepsis_label"] for e in window])
-        y_pred = np.array([1 if e["risk_score"] >= 0.5 else 0 for e in window])
+        y_pred = np.array([1 if e["risk_score"] >= 0.3 else 0 for e in window])
 
         tp = np.sum((y_pred == 1) & (y_true == 1))
         fp = np.sum((y_pred == 1) & (y_true == 0))
@@ -335,7 +321,7 @@ def feedback_loop():
         ROLLING_RECALL.set(recall)
         ROLLING_PRECISION.set(precision)
 
-        # Append last 100 labelled to confirmed pool
+        # Append to confirmed pool for retraining
         new_rows = []
         for e in labelled[-100:]:
             row = e["features"].copy()
@@ -358,7 +344,8 @@ def feedback_loop():
 
         log.info(
             f"Feedback loop: recall={recall:.3f} "
-            f"precision={precision:.3f}"
+            f"precision={precision:.3f} "
+            f"pool={len(combined) if new_rows else '—'}"
         )
 
     except Exception as e:
@@ -368,8 +355,7 @@ def feedback_loop():
 def drift_check():
     """
     KS test on rolling window of incoming features vs
-    Hospital A baseline statistics.
-    Fires drift_detected_total when 2+ features drift.
+    Hospital A baseline. Fires drift alert when 2+ features drift.
     Runs every 10 minutes.
     """
     try:
@@ -393,13 +379,9 @@ def drift_check():
                 for e in entries
                 if e["features"].get(col) is not None
             ]
-            if len(prod_vals) < 100:
+            if len(prod_vals) < 100 or col not in BASELINE_STATS:
                 continue
 
-            if col not in BASELINE_STATS:
-                continue
-
-            # Generate reference samples from baseline distribution
             b_mean = BASELINE_STATS[col]["mean"]
             b_std  = BASELINE_STATS[col]["std"] or 1
             ref    = np.random.normal(b_mean, b_std, len(prod_vals))

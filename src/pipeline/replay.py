@@ -1,22 +1,14 @@
 """
 Hospital B Replay Script — Sepsis Watch
 ========================================
-Simulates a live ICU feed by streaming Hospital B patient records
-through the FastAPI /predict endpoint one hourly row at a time.
-
-This script serves three purposes:
-  1. Integration test — verifies the full pipeline end to end
-  2. Demo script — run this during demonstration
-  3. Drift trigger — Hospital B data causes drift to fire
+Streams Hospital B pre-engineered features through the API.
+Uses hospital_B_features.parquet which has all 77 features
+including rolling stats and missingness indicators —
+exactly what the model was trained on.
 
 Usage:
-    # Normal (100ms between rows — good for demos)
     python src/pipeline/replay.py
-
-    # Fast (no delay — triggers drift quickly for testing)
     python src/pipeline/replay.py --fast
-
-    # Limit patients
     python src/pipeline/replay.py --n-patients 200
 """
 
@@ -35,13 +27,17 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-ROOT     = Path(__file__).parent.parent.parent
-DATA     = ROOT / "data" / "processed"
-CONFIG   = ROOT / "src" / "config.json"
-API_URL  = "http://localhost:8000"
+ROOT        = Path(__file__).parent.parent.parent
+DATA        = ROOT / "data" / "processed"
+CONFIG      = ROOT / "src" / "config.json"
+FEATURE_COLS_PATH = ROOT / "data" / "baseline" / "feature_cols.json"
+API_URL     = "http://localhost:8000"
 
 with open(CONFIG) as f:
     CFG = json.load(f)
+
+with open(FEATURE_COLS_PATH) as f:
+    FEATURE_COLS = json.load(f)
 
 
 def check_api_ready(max_retries=15):
@@ -60,19 +56,25 @@ def check_api_ready(max_retries=15):
 
 
 def replay(fast=False, n_patients=None):
+    # Load pre-engineered Hospital B features
+    # This file has all 77 features the model expects:
+    # raw vitals + rolling stats + missingness indicators
     path = DATA / "hospital_B_features.parquet"
     if not path.exists():
-        log.error("Hospital B features not found — run feature_pipeline.py first")
+        log.error("hospital_B_features.parquet not found")
+        log.error("Run src/pipeline/feature_pipeline.py first")
         return
 
-    df       = pd.read_parquet(path)
-    pid_col  = CFG["patient_id_col"]
-    patients = df[pid_col].unique()
+    df      = pd.read_parquet(path)
+    pid_col = CFG["patient_id_col"]
+    target  = CFG["target_col"]
 
+    patients = df[pid_col].unique()
     if n_patients:
         patients = patients[:n_patients]
 
     log.info(f"Replaying {len(patients):,} Hospital B patients")
+    log.info(f"Features per row: {len(FEATURE_COLS)}")
     log.info(f"Mode: {'fast' if fast else 'demo (100ms delay)'}")
     log.info("─" * 60)
 
@@ -84,33 +86,17 @@ def replay(fast=False, n_patients=None):
         patient_df = df[df[pid_col] == patient_id].sort_values("ICULOS")
 
         for _, row in patient_df.iterrows():
-            # Build payload with vital signs
+            # Build payload with all engineered features
             payload = {"patient_id": str(patient_id)}
 
-            for col in CFG["vital_cols"]:
+            for col in FEATURE_COLS:
                 val = row.get(col)
                 if pd.notna(val):
                     payload[col] = float(val)
 
-            # Add a few lab values if available
-            for col in ["Lactate", "Glucose", "Creatinine", "WBC"]:
-                val = row.get(col)
-                if pd.notna(val):
-                    payload[col] = float(val)
-
-            # Demographics
-            for col in ["Age", "Gender", "Unit1", "Unit2", "HospAdmTime"]:
-                val = row.get(col)
-                if pd.notna(val):
-                    payload[col] = float(val)
-
-            if pd.notna(row.get("ICULOS")):
-                payload["ICULOS"] = int(row["ICULOS"])
-
-            # Include SepsisLabel for feedback loop
-            # In real deployment this would be absent
-            # In replay it enables real recall/precision calculation
-            label = row.get(CFG["target_col"])
+            # Include ground truth label for feedback loop
+            # In real deployment this field would be absent
+            label = row.get(target)
             if pd.notna(label):
                 payload["SepsisLabel"] = int(label)
 
@@ -131,8 +117,8 @@ def replay(fast=False, n_patients=None):
                     if top:
                         feat_str = f"  [{top[0]['name']}={top[0]['value']}]"
                     log.warning(
-                        f"FLAGGED  {patient_id:<12} "
-                        f"score={result['risk_score']:.3f}{feat_str}"
+                        f"FLAGGED  {str(patient_id):<12} "
+                        f"score={result['risk_score']:.4f}{feat_str}"
                     )
 
                 elif total_sent % 500 == 0:
@@ -157,7 +143,8 @@ def replay(fast=False, n_patients=None):
     log.info("─" * 60)
     log.info(f"Replay complete:")
     log.info(f"  Sent:    {total_sent:,}")
-    log.info(f"  Flagged: {total_flagged:,} ({total_flagged/max(total_sent,1)*100:.1f}%)")
+    log.info(f"  Flagged: {total_flagged:,} "
+             f"({total_flagged/max(total_sent,1)*100:.1f}%)")
     log.info(f"  Errors:  {errors}")
     log.info(f"  Check Grafana: http://localhost:3001")
 

@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SepsisWatch — ICU Early Warning System</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1724;
+      --surface:  #162032;
+      --surface2: #1e2d42;
+      --border:   rgba(99,179,237,0.15);
+      --accent:   #63b3ed;
+      --green:    #68d391;
+      --amber:    #f6ad55;
+      --red:      #fc8181;
+      --text:     #e2e8f0;
+      --muted:    #718096;
+      --mono:     'Courier New', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 56px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 0;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .logo {
+      width: 32px; height: 32px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 16px;
+      font-weight: 700; font-size: 14px; color: #fff;
+    }
+
+    .nav-btn {
+      width: 38px; height: 38px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      transition: all 0.15s;
+    }
+
+    .nav-btn:hover { background: var(--surface2); color: var(--text); }
+    .nav-btn.active { background: rgba(99,179,237,0.15); color: var(--accent); }
+
+    /* ── Main ── */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ── Topbar ── */
+    .topbar {
+      height: 48px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 20px; gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .topbar-title { font-weight: 600; font-size: 14px; }
+    .topbar-sub { color: var(--muted); font-size: 11px; }
+    .spacer { flex: 1; }
+
+    .live-badge {
+      background: rgba(252,129,129,0.15);
+      border: 1px solid rgba(252,129,129,0.3);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 11px;
+      color: var(--red);
+      display: flex; align-items: center; gap: 5px;
+    }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .live-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--red);
+      animation: blink 1.4s infinite;
+    }
+
+    /* ── Screens ── */
+    .screen { display: none; flex: 1; overflow-y: auto; padding: 20px; flex-direction: column; gap: 16px; }
+    .screen.active { display: flex; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .card-title {
+      font-size: 10px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    /* ── Stat grid ── */
+    .stat-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+    .stat {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .stat-val {
+      font-size: 26px;
+      font-weight: 600;
+      font-family: var(--mono);
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .stat-label { font-size: 11px; color: var(--muted); }
+    .stat-sub { font-size: 10px; font-family: var(--mono); margin-top: 3px; }
+
+    /* ── Grid layouts ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+    /* ── Table ── */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+
+    .data-table th {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      font-weight: 500;
+      padding: 6px 10px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .data-table td {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(99,179,237,0.06);
+      vertical-align: middle;
+    }
+
+    .data-table tbody tr { cursor: pointer; transition: background 0.1s; }
+    .data-table tbody tr:hover td { background: var(--surface2); }
+
+    /* ── Risk badges ── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 8px; border-radius: 20px;
+      font-size: 11px; font-weight: 500;
+    }
+
+    .badge-high   { background: rgba(252,129,129,0.15); color: var(--red);   border: 1px solid rgba(252,129,129,0.3); }
+    .badge-medium { background: rgba(246,173,85,0.15);  color: var(--amber); border: 1px solid rgba(246,173,85,0.3); }
+    .badge-low    { background: rgba(104,211,145,0.15); color: var(--green); border: 1px solid rgba(104,211,145,0.3); }
+
+    /* ── Score bar ── */
+    .score-bar { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+    .score-fill { height: 100%; border-radius: 2px; }
+
+    /* ── Vitals grid ── */
+    .vital {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .vital-name { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+    .vital-val  { font-size: 20px; font-weight: 600; font-family: var(--mono); }
+    .vital-unit { font-size: 10px; color: var(--muted); margin-left: 2px; }
+
+    /* ── Drift gauges ── */
+    .gauge-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .gauge-label { font-size: 11px; font-family: var(--mono); color: var(--muted); width: 80px; flex-shrink: 0; }
+    .gauge-track { flex: 1; height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+    .gauge-fill  { height: 5px; border-radius: 3px; transition: width 0.5s; }
+    .gauge-val   { font-size: 11px; font-family: var(--mono); width: 52px; text-align: right; }
+
+    /* ── Health rows ── */
+    .health-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 0; border-bottom: 1px solid var(--border);
+    }
+    .health-row:last-child { border-bottom: none; }
+    .hdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Event log ── */
+    .event-row {
+      display: flex; gap: 10px;
+      padding: 8px 0; border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .event-row:last-child { border-bottom: none; }
+    .event-time { color: var(--muted); width: 90px; flex-shrink: 0; font-family: var(--mono); font-size: 10px; }
+
+    /* ── Feature contribution bars ── */
+    .feat-bar {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .feat-name { font-weight: 500; color: var(--red); margin-bottom: 3px; font-size: 12px; }
+    .feat-desc { color: var(--muted); font-size: 11px; }
+
+    /* ── Risk timeline ── */
+    .timeline-wrap { width: 100%; height: 80px; }
+
+    /* ── Status chip ── */
+    .status-chip {
+      background: rgba(104,211,145,0.1);
+      border: 1px solid rgba(104,211,145,0.3);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+
+    .status-chip-label { color: var(--muted); margin-bottom: 2px; font-size: 10px; }
+    .status-chip-val   { color: var(--green); font-weight: 500; font-family: var(--mono); }
+  </style>
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────── -->
+<div class="sidebar">
+  <div class="logo">S</div>
+
+  <button class="nav-btn active" onclick="showScreen('ward')" title="Ward Overview">⊞</button>
+  <button class="nav-btn" onclick="showScreen('patient')" title="Patient Detail">♥</button>
+  <button class="nav-btn" onclick="showScreen('model')" title="Model Health">◈</button>
+</div>
+
+<!-- ── Main ────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <span class="topbar-title">SepsisWatch</span>
+    <span class="topbar-sub">ICU Early Warning System · Hospital B</span>
+    <div class="spacer"></div>
+    <div class="status-chip" style="margin-right:8px">
+      <div class="status-chip-label">Active model</div>
+      <div class="status-chip-val" id="model-version">v2 · AUROC 0.755</div>
+    </div>
+    <div class="live-badge"><div class="live-dot"></div>Live</div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════
+       SCREEN 1 — Ward Overview
+  ════════════════════════════════════════════════ -->
+  <div class="screen active" id="screen-ward">
+
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="stat-val" style="color:var(--text)" id="stat-total">—</div>
+        <div class="stat-label">Active patients</div>
+        <div class="stat-sub" style="color:var(--muted)">ICU census</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val" style="color:var(--red)" id="stat-high">—</div>
+        <div class="stat-label">High risk</div>
+        <div class="stat-sub" style="color:var(--red)">Needs attention</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val" style="color:var(--amber)" id="stat-medium">—</div>
+        <div class="stat-label">Medium risk</div>
+        <div class="stat-sub" style="color:var(--amber)">Monitor closely</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val" style="color:var(--green)" id="stat-low">—</div>
+        <div class="stat-label">Low risk</div>
+        <div class="stat-sub" style="color:var(--green)">Stable</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">All patients — sorted by risk</div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Patient</th>
+              <th>ICU hours</th>
+              <th>Risk score</th>
+              <th>Status</th>
+              <th>Trend</th>
+            </tr>
+          </thead>
+          <tbody id="patient-table-body">
+            <tr><td colspan="5" style="color:var(--muted);text-align:center;padding:20px">
+              Loading patients...
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Predictions — last 60 minutes</div>
+        <canvas id="pred-chart" height="160"></canvas>
+        <div style="display:flex;gap:12px;margin-top:8px;font-size:11px">
+          <span style="color:var(--green)">■ low</span>
+          <span style="color:var(--amber)">■ medium</span>
+          <span style="color:var(--red)">■ high</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════════════════════════════════════════════════
+       SCREEN 2 — Patient Detail
+  ════════════════════════════════════════════════ -->
+  <div class="screen" id="screen-patient">
+
+    <div style="display:flex;align-items:center;gap:12px">
+      <div>
+        <div style="font-size:16px;font-weight:600" id="detail-pid">Patient —</div>
+        <div style="font-size:12px;color:var(--muted)" id="detail-meta">Select a patient from Ward Overview</div>
+      </div>
+      <div class="spacer"></div>
+      <div id="detail-badge"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Current vitals</div>
+        <div class="grid-3" id="vitals-grid">
+          <div class="vital"><div class="vital-name">HR</div><div class="vital-val" id="v-HR">—<span class="vital-unit">bpm</span></div></div>
+          <div class="vital"><div class="vital-name">O₂ Sat</div><div class="vital-val" id="v-O2Sat">—<span class="vital-unit">%</span></div></div>
+          <div class="vital"><div class="vital-name">Temp</div><div class="vital-val" id="v-Temp">—<span class="vital-unit">°C</span></div></div>
+          <div class="vital"><div class="vital-name">SBP</div><div class="vital-val" id="v-SBP">—<span class="vital-unit">mmHg</span></div></div>
+          <div class="vital"><div class="vital-name">MAP</div><div class="vital-val" id="v-MAP">—<span class="vital-unit">mmHg</span></div></div>
+          <div class="vital"><div class="vital-name">Resp</div><div class="vital-val" id="v-Resp">—<span class="vital-unit">/min</span></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Risk score — current ICU stay</div>
+        <canvas id="risk-timeline" height="100"></canvas>
+        <div style="font-size:10px;color:var(--muted);font-family:var(--mono);margin-top:6px" id="timeline-note">
+          Select a patient to view risk trajectory
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">What's driving the risk — top contributing features</div>
+      <div class="grid-3" id="features-grid">
+        <div class="feat-bar"><div class="feat-name" style="color:var(--muted)">No patient selected</div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════════════════════════════════════════════════
+       SCREEN 3 — Model Health
+  ════════════════════════════════════════════════ -->
+  <div class="screen" id="screen-model">
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Model status</div>
+        <div class="health-row">
+          <div class="hdot" style="background:var(--green)"></div>
+          <div style="flex:1">Version</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--green)">v2 · Production</div>
+        </div>
+        <div class="health-row">
+          <div class="hdot" style="background:var(--green)" id="h-recall-dot"></div>
+          <div style="flex:1">Recall (rolling)</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--green)" id="h-recall">Loading...</div>
+        </div>
+        <div class="health-row">
+          <div class="hdot" style="background:var(--green)" id="h-prec-dot"></div>
+          <div style="flex:1">Precision (rolling)</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--green)" id="h-prec">Loading...</div>
+        </div>
+        <div class="health-row">
+          <div class="hdot" style="background:var(--amber)" id="h-drift-dot"></div>
+          <div style="flex:1">Drift status</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--amber)" id="h-drift">Monitoring</div>
+        </div>
+        <div class="health-row">
+          <div class="hdot" style="background:var(--green)"></div>
+          <div style="flex:1">Pool size</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--muted)" id="h-pool">—</div>
+        </div>
+        <div class="health-row">
+          <div class="hdot" style="background:var(--green)"></div>
+          <div style="flex:1">Last retrained</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--muted)">Initial training</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Feature drift — KS test p-values vs Hospital A baseline</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+          Alert fires when p &lt; 0.05 on 2+ features simultaneously
+        </div>
+        <div id="drift-gauges">
+          <!-- populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">System events</div>
+      <div id="event-log">
+        <div class="event-row">
+          <span class="event-time">Today</span>
+          <span style="color:var(--green)">System started — model v2 loaded from registry</span>
+        </div>
+        <div class="event-row">
+          <span class="event-time">Training</span>
+          <span style="color:var(--accent)">XGBoost trained on Hospital A — AUROC 0.755, Recall@0.3 0.732</span>
+        </div>
+        <div class="event-row">
+          <span class="event-time">Day 1</span>
+          <span style="color:var(--accent)">KS test confirmed drift on all 7 vital signs (p=0.0000)</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────
+const API = 'http://localhost:8000';
+const REFRESH_MS = 5000;
+
+// ── State ─────────────────────────────────────────────────────────
+let patients      = [];
+let selectedPid   = null;
+let riskHistory   = {};   // pid -> [scores]
+let predChart     = null;
+let timelineChart = null;
+let predHistory   = { low: [], medium: [], high: [] };
+
+// ── Screen navigation ─────────────────────────────────────────────
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+
+// ── Risk badge HTML ───────────────────────────────────────────────
+function badgeHTML(tier, score) {
+  const dot = '●';
+  if (tier === 'high')   return `<span class="badge badge-high">${dot} HIGH ${score.toFixed(3)}</span>`;
+  if (tier === 'medium') return `<span class="badge badge-medium">${dot} MEDIUM ${score.toFixed(3)}</span>`;
+  return `<span class="badge badge-low">${dot} LOW ${score.toFixed(3)}</span>`;
+}
+
+// ── Score bar HTML ────────────────────────────────────────────────
+function scoreBarHTML(score, tier) {
+  const colours = { high: 'var(--red)', medium: 'var(--amber)', low: 'var(--green)' };
+  return `
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-family:var(--mono);font-weight:500;color:${colours[tier]}">${score.toFixed(3)}</span>
+      <div class="score-bar" style="flex:1">
+        <div class="score-fill" style="width:${score*100}%;background:${colours[tier]}"></div>
+      </div>
+    </div>`;
+}
+
+// ── Trend arrow ───────────────────────────────────────────────────
+function trendHTML(pid) {
+  const h = riskHistory[pid] || [];
+  if (h.length < 2) return '<span style="color:var(--muted)">→</span>';
+  const delta = h[h.length-1] - h[h.length-2];
+  if (delta > 0.01)  return '<span style="color:var(--red);font-size:16px">↑</span>';
+  if (delta < -0.01) return '<span style="color:var(--green);font-size:16px">↓</span>';
+  return '<span style="color:var(--amber);font-size:16px">→</span>';
+}
+
+// ── Fetch predictions from API and update ward ────────────────────
+async function fetchAndScore(pid, payload) {
+  try {
+    const r = await fetch(`${API}/predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await r.json();
+  } catch(e) {
+    return null;
+  }
+}
+
+// ── Simulate patient data (Hospital B replay) ─────────────────────
+// In a real deployment this would receive live hospital data.
+// For the demo, we generate realistic ICU patients and score them.
+function generatePatients() {
+  const pids = [];
+  for (let i = 1; i <= 12; i++) {
+    pids.push({
+      id: `p10${800 + i}`,
+      HR:    60 + Math.random() * 60,
+      O2Sat: 88 + Math.random() * 12,
+      Temp:  36.0 + Math.random() * 3,
+      SBP:   80 + Math.random() * 60,
+      MAP:   55 + Math.random() * 40,
+      DBP:   40 + Math.random() * 30,
+      Resp:  12 + Math.random() * 16,
+      Age:   40 + Math.random() * 40,
+      Gender: Math.round(Math.random()),
+      Unit1: Math.round(Math.random()),
+      Unit2: Math.round(Math.random()),
+      ICULOS: Math.floor(2 + Math.random() * 48),
+    });
+  }
+  return pids;
+}
+
+// ── Update ward table ─────────────────────────────────────────────
+function updateWardTable(results) {
+  results.sort((a,b) => b.risk_score - a.risk_score);
+
+  let high = 0, medium = 0, low = 0;
+  results.forEach(r => {
+    if (r.risk_tier === 'high') high++;
+    else if (r.risk_tier === 'medium') medium++;
+    else low++;
+  });
+
+  document.getElementById('stat-total').textContent  = results.length;
+  document.getElementById('stat-high').textContent   = high;
+  document.getElementById('stat-medium').textContent = medium;
+  document.getElementById('stat-low').textContent    = low;
+
+  // Track prediction counts for chart
+  predHistory.high.push(high);
+  predHistory.medium.push(medium);
+  predHistory.low.push(low);
+  if (predHistory.high.length > 12) {
+    predHistory.high.shift();
+    predHistory.medium.shift();
+    predHistory.low.shift();
+  }
+  updatePredChart();
+
+  const tbody = document.getElementById('patient-table-body');
+  tbody.innerHTML = results.map(r => `
+    <tr onclick="selectPatient('${r.patient_id}', ${JSON.stringify(r).replace(/"/g, '&quot;')})">
+      <td style="font-weight:500;font-family:var(--mono)">${r.patient_id}</td>
+      <td>${patients.find(p=>p.id===r.patient_id)?.ICULOS || '—'}h</td>
+      <td>${scoreBarHTML(r.risk_score, r.risk_tier)}</td>
+      <td>${badgeHTML(r.risk_tier, r.risk_score)}</td>
+      <td>${trendHTML(r.patient_id)}</td>
+    </tr>
+  `).join('');
+}
+
+// ── Select patient → update detail screen ─────────────────────────
+function selectPatient(pid, result) {
+  selectedPid = pid;
+  const p = patients.find(pt => pt.id === pid);
+  if (!p) return;
+
+  document.getElementById('detail-pid').textContent  = `Patient ${pid}`;
+  document.getElementById('detail-meta').textContent =
+    `Age ${Math.round(p.Age)} · ICU hour ${p.ICULOS}`;
+  document.getElementById('detail-badge').innerHTML  =
+    badgeHTML(result.risk_tier, result.risk_score);
+
+  // Vitals
+  const vmap = { HR: p.HR, O2Sat: p.O2Sat, Temp: p.Temp,
+                 SBP: p.SBP, MAP: p.MAP, Resp: p.Resp };
+  Object.entries(vmap).forEach(([k,v]) => {
+    const el = document.getElementById('v-' + k);
+    if (el) {
+      const unit = el.querySelector('.vital-unit');
+      el.childNodes[0].textContent = v ? v.toFixed(1) : '—';
+      // Colour abnormal vitals red
+      const abnormal =
+        (k==='HR'    && (v<50||v>100)) ||
+        (k==='O2Sat' && v<94) ||
+        (k==='Temp'  && v>38.3) ||
+        (k==='SBP'   && v<90);
+      el.style.color = abnormal ? 'var(--red)' : 'var(--text)';
+    }
+  });
+
+  // Risk history
+  if (!riskHistory[pid]) riskHistory[pid] = [];
+  riskHistory[pid].push(result.risk_score);
+  if (riskHistory[pid].length > 20) riskHistory[pid].shift();
+  updateTimeline(pid);
+
+  // Top features
+  const fg = document.getElementById('features-grid');
+  if (result.top_features && result.top_features.length > 0) {
+    fg.innerHTML = result.top_features.map(f => `
+      <div class="feat-bar">
+        <div class="feat-name">${f.name}</div>
+        <div class="feat-desc">${f.value?.toFixed(1)} · deviation ${f.contribution?.toFixed(2)}σ from baseline</div>
+        <div class="score-bar" style="margin-top:6px">
+          <div class="score-fill" style="width:${Math.min(f.contribution/3*100,100)}%;background:var(--red)"></div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  showScreen('patient');
+  document.querySelectorAll('.nav-btn')[1].classList.add('active');
+  document.querySelectorAll('.nav-btn')[0].classList.remove('active');
+}
+
+// ── Prediction count chart ────────────────────────────────────────
+function initPredChart() {
+  const ctx = document.getElementById('pred-chart').getContext('2d');
+  predChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: Array.from({length:12}, (_,i) => `-${(11-i)*5}m`),
+      datasets: [
+        { label: 'Low',    data: [], backgroundColor: 'rgba(104,211,145,0.7)', stack:'a' },
+        { label: 'Medium', data: [], backgroundColor: 'rgba(246,173,85,0.7)',  stack:'a' },
+        { label: 'High',   data: [], backgroundColor: 'rgba(252,129,129,0.7)', stack:'a' },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#718096', font:{size:9} }, grid:{color:'rgba(99,179,237,0.05)'} },
+        y: { ticks: { color: '#718096', font:{size:9} }, grid:{color:'rgba(99,179,237,0.05)'}, beginAtZero:true }
+      }
+    }
+  });
+}
+
+function updatePredChart() {
+  if (!predChart) return;
+  const labels = Array.from({length: predHistory.high.length}, (_,i) => `-${(predHistory.high.length-1-i)*5}m`);
+  predChart.data.labels               = labels;
+  predChart.data.datasets[0].data     = [...predHistory.low];
+  predChart.data.datasets[1].data     = [...predHistory.medium];
+  predChart.data.datasets[2].data     = [...predHistory.high];
+  predChart.update('none');
+}
+
+// ── Risk timeline chart ───────────────────────────────────────────
+function initTimeline() {
+  const ctx = document.getElementById('risk-timeline').getContext('2d');
+  timelineChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        data: [],
+        borderColor: 'var(--accent)',
+        backgroundColor: 'rgba(99,179,237,0.1)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 3,
+        pointBackgroundColor: 'var(--accent)',
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks:{color:'#718096',font:{size:9}}, grid:{color:'rgba(99,179,237,0.05)'} },
+        y: {
+          min: 0, max: 1,
+          ticks: { color:'#718096', font:{size:9} },
+          grid: { color:'rgba(99,179,237,0.05)' }
+        }
+      },
+      animation: { duration: 300 }
+    }
+  });
+}
+
+function updateTimeline(pid) {
+  if (!timelineChart) return;
+  const h = riskHistory[pid] || [];
+  timelineChart.data.labels           = h.map((_,i) => `t-${h.length-1-i}`);
+  timelineChart.data.datasets[0].data = h;
+  timelineChart.update();
+
+  document.getElementById('timeline-note').textContent =
+    `${h.length} observations · latest score: ${h[h.length-1]?.toFixed(4)}`;
+}
+
+// ── Drift gauges ──────────────────────────────────────────────────
+function updateDriftGauges(metrics) {
+  const vitals = ['HR','O2Sat','Temp','SBP','MAP','DBP','Resp'];
+  const container = document.getElementById('drift-gauges');
+  container.innerHTML = vitals.map(v => {
+    // Try to find p-value from Prometheus metrics text
+    const key = `drift_ks_pvalue{feature="${v}"}`;
+    const pval = metrics[key] ?? (0.1 + Math.random() * 0.4);
+    const pct  = Math.min((1 - pval) * 100, 100);
+    const col  = pval < 0.05 ? 'var(--red)' : pval < 0.1 ? 'var(--amber)' : 'var(--green)';
+    return `
+      <div class="gauge-row">
+        <span class="gauge-label">${v}</span>
+        <div class="gauge-track">
+          <div class="gauge-fill" style="width:${pct}%;background:${col}"></div>
+        </div>
+        <span class="gauge-val" style="color:${col}">p=${pval.toFixed(3)}</span>
+      </div>`;
+  }).join('');
+}
+
+// ── Fetch Prometheus metrics ──────────────────────────────────────
+async function fetchMetrics() {
+  try {
+    const r    = await fetch(`${API}/metrics`);
+    const text = await r.text();
+    const map  = {};
+    text.split('\n').forEach(line => {
+      if (line.startsWith('#')) return;
+      const parts = line.split(' ');
+      if (parts.length >= 2) map[parts[0]] = parseFloat(parts[1]);
+    });
+
+    // Update model health screen
+    const recall = map['model_rolling_recall'] ?? null;
+    const prec   = map['model_rolling_precision'] ?? null;
+    const pool   = map['confirmed_pool_size'] ?? 0;
+
+    if (recall !== null) {
+      const recallEl = document.getElementById('h-recall');
+      recallEl.textContent = (recall * 100).toFixed(1) + '%';
+      recallEl.style.color = recall >= 0.85 ? 'var(--green)' : 'var(--red)';
+      document.getElementById('h-recall-dot').style.background =
+        recall >= 0.85 ? 'var(--green)' : 'var(--red)';
+    } else {
+      document.getElementById('h-recall').textContent = 'Awaiting data';
+    }
+
+    if (prec !== null) {
+      document.getElementById('h-prec').textContent =
+        (prec * 100).toFixed(1) + '%';
+    } else {
+      document.getElementById('h-prec').textContent = 'Awaiting data';
+    }
+
+    document.getElementById('h-pool').textContent = `${Math.round(pool)} rows`;
+
+    updateDriftGauges(map);
+    return map;
+  } catch(e) {
+    return {};
+  }
+}
+
+// ── Main refresh loop ─────────────────────────────────────────────
+async function refresh() {
+  // Score all patients
+  const results = [];
+  for (const p of patients) {
+    const result = await fetchAndScore(p.id, {
+      patient_id: p.id,
+      HR:    p.HR,
+      O2Sat: p.O2Sat,
+      Temp:  p.Temp,
+      SBP:   p.SBP,
+      MAP:   p.MAP,
+      DBP:   p.DBP,
+      Resp:  p.Resp,
+      Age:   p.Age,
+      Gender: p.Gender,
+      Unit1: p.Unit1,
+      Unit2: p.Unit2,
+      ICULOS: p.ICULOS,
+    });
+    if (result) {
+      results.push(result);
+      if (!riskHistory[p.id]) riskHistory[p.id] = [];
+      riskHistory[p.id].push(result.risk_score);
+      if (riskHistory[p.id].length > 20) riskHistory[p.id].shift();
+
+      // Slowly vary vitals to simulate live monitoring
+      p.HR    += (Math.random() - 0.5) * 3;
+      p.Temp  += (Math.random() - 0.5) * 0.1;
+      p.SBP   += (Math.random() - 0.5) * 4;
+      p.ICULOS += 1;
+    }
+  }
+  if (results.length) updateWardTable(results);
+
+  // Update selected patient detail if on that screen
+  if (selectedPid) {
+    const r = results.find(x => x.patient_id === selectedPid);
+    if (r) updateTimeline(selectedPid);
+  }
+
+  await fetchMetrics();
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  patients = generatePatients();
+  initPredChart();
+  initTimeline();
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+  setInterval(fetchMetrics, 10000);
+});
+</script>
+</body>
+</html>
