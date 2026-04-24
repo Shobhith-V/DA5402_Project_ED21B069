@@ -72,7 +72,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
@@ -101,7 +101,6 @@ services:
       retries: 5
       start_period: 90s
     restart: unless-stopped
-
   # ── 4. Prometheus ─────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.48.1
@@ -157,3 +156,15 @@ services:
     networks:
       - sepsis-net
     restart: unless-stopped
+
+  # ── Frontend ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sepsis-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - sepsis-net
+    restart: unless-stopped    

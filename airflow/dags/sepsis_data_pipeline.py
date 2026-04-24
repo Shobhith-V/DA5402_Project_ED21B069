@@ -10,16 +10,19 @@ Trigger manually:
 
 Or from Airflow UI at http://localhost:8080
 """
-
 import sys
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 
+# Add project root to path for imports
+sys.path.insert(0, "/opt/airflow")
+
+# Override ROOT for Docker environment
+os.environ["SEPSIS_ROOT"] = "/opt/airflow"
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-
-# Make src importable inside Airflow container
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.pipeline.feature_pipeline import (
     validate_raw_data,
