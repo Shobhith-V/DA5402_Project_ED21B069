@@ -67,9 +67,8 @@ with open(BASELINE / "hospital_a_baseline.json") as f:
     BASELINE_STATS = json.load(f)
 
 # ── Patient history buffer ─────────────────────────────────────────
-# Stores last 6 rows per patient to compute rolling statistics.
-# Without history, rolling mean = current value (no trend signal).
 # With history, model gets the temporal patterns it was trained on.
+# we are storing 6 rows because thats 6 hours of data which was the design choice 
 _patient_history = defaultdict(lambda: deque(maxlen=6))
 
 # ── Prometheus metrics ─────────────────────────────────────────────
@@ -241,17 +240,16 @@ def predict(row: PatientRow):
     if not _model_ready:
         raise HTTPException(status_code=503, detail="Model not ready")
 
-    # Extract all fields — PatientRow accepts any extra fields
-    # Extract all fields from request
+    # Extracting all fields — PatientRow accepts any extra fields
+    # Extracting all fields from request
     row_dict = row.model_dump()
     row_dict.pop("patient_id", None)
     label = row_dict.pop("SepsisLabel", None)
 
-    # Check what we actually received
     roll_features_received = {k:v for k,v in row_dict.items() if 'roll' in k}
     log.info(f"Rolling features in request: {len(roll_features_received)}")
 
-    # Update history buffer
+    # Updating history buffer
     _patient_history[row.patient_id].append(row_dict.copy())
     history = list(_patient_history[row.patient_id])
 
@@ -287,7 +285,7 @@ def predict(row: PatientRow):
     else:
         risk_tier = "low"
 
-    # Update Prometheus
+    # Updating Prometheus
     RISK_SCORE.labels(patient_id=row.patient_id).set(risk_score)
     PREDICTIONS_TOTAL.labels(risk_tier=risk_tier).inc()
 
@@ -308,7 +306,7 @@ def predict(row: PatientRow):
         top_features, key=lambda x: x["contribution"], reverse=True
     )[:3]
 
-    # Log prediction for feedback loop
+    # Logging prediction for feedback loop
     log_entry = {
         "patient_id":  row.patient_id,
         "timestamp":   time.time(),
@@ -333,12 +331,7 @@ def predict(row: PatientRow):
 
 # ── Background jobs ────────────────────────────────────────────────
 def feedback_loop():
-    """
-    Compares predictions against SepsisLabel ground truth.
-    Updates rolling recall and precision Prometheus metrics.
-    Accumulates confirmed rows for retraining pool.
-    Runs every 5 minutes.
-    """
+    # this loop runs every 5 minutes and checks the prediction log for entries with SepsisLabel (ground truth).
     try:
         if not PRED_LOG.exists():
             return
@@ -364,7 +357,7 @@ def feedback_loop():
         ROLLING_RECALL.set(recall)
         ROLLING_PRECISION.set(precision)
 
-        # Append to confirmed pool for retraining
+        # Appending to confirmed pool for retraining
         new_rows = []
         for e in labelled[-500:]:
             row = e["features"].copy()
@@ -396,11 +389,8 @@ def feedback_loop():
 
 
 def drift_check():
-    """
-    KS test on rolling window of incoming features vs
-    Hospital A baseline. Fires drift alert when 2+ features drift.
-    Runs every 10 minutes.
-    """
+
+    # KS test on rolling window of incoming features vs Hospital A baseline. An alert is fired when 2+ features show drift. This runs every 10 minutes.
     try:
         if not PRED_LOG.exists():
             return
@@ -447,13 +437,8 @@ import time as _time
 _retrain_last_time = 0.0
 
 def check_retrain_trigger():
-    """
-    Automatically triggers retraining when:
-    - Confirmed pool >= 1000 rows AND
-    - Rolling recall < 0.85 (model degrading)
-    Runs every 2 minutes.
-    Cooldown: 10 minutes between retrains.
-    """
+
+    # This function checks if retraining conditions are met and triggers retraining if so. It uses a cooldown to avoid too frequent retraining. It checks the size of the confirmed pool and the rolling recall metric to decide whether to retrain.
     global _retrain_last_time
     try:
         # Cooldown — don't retrain more than once per 10 minutes

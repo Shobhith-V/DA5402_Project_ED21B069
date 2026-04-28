@@ -1,24 +1,26 @@
 """
-Airflow DAG — Sepsis Watch Data Pipeline
-=========================================
-Wraps feature_pipeline.py functions as Airflow tasks.
-The actual logic lives in src/pipeline/feature_pipeline.py —
-this file is purely orchestration.
+Airflow DAG — SepsisWatch Data Pipeline
+--------------------------------------
 
-Trigger manually:
-  airflow dags trigger sepsis_data_pipeline
+This DAG orchestrates the data processing pipeline for SepsisWatch.
 
-Or from Airflow UI at http://localhost:8080
+Each step in the pipeline (validation, imputation, feature engineering, and baseline computation)
+is executed as an Airflow task. The actual processing logic is implemented in
+src/pipeline/feature_pipeline.py — this file only handles orchestration.
+
+You can trigger the pipeline:
+- From the Airflow UI: http://localhost:8080
+- Or via CLI: airflow dags trigger sepsis_data_pipeline
 """
 import sys
 import os
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# Add project root to path for imports
+# Adding project root to path for imports
 sys.path.insert(0, "/opt/airflow")
 
-# Override ROOT for Docker environment
+# Overriding ROOT for Docker environment
 os.environ["SEPSIS_ROOT"] = "/opt/airflow"
 
 from airflow import DAG
@@ -70,5 +72,4 @@ with DAG(
         python_callable=compute_baseline_stats,
     )
 
-    # Strict sequential dependency
     t1 >> t2 >> t3 >> t4

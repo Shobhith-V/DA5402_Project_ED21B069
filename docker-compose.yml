@@ -59,7 +59,7 @@ services:
       --default-artifact-root mlflow-artifacts:/
       --artifacts-destination /mlruns/artifacts
       --serve-artifacts
-      --allowed-hosts "*"
+      --allowed-hosts "*" 
     networks:
       - sepsis-net
     healthcheck:

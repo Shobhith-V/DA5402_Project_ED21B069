@@ -36,10 +36,6 @@ def load_config():
         return json.load(f)
 
 
-# ══════════════════════════════════════════════════════════════════
-# TASK 1 — Validate
-# ══════════════════════════════════════════════════════════════════
-
 def validate_raw_data():
     log.info("TASK 1: Validating raw data")
     cfg = load_config()
@@ -64,10 +60,6 @@ def validate_raw_data():
     log.info("TASK 1 complete")
     return True
 
-
-# ══════════════════════════════════════════════════════════════════
-# TASK 2 — Impute
-# ══════════════════════════════════════════════════════════════════
 
 def impute_features():
     """
@@ -115,11 +107,6 @@ def impute_features():
         log.info(f"Imputing Hospital {hospital}...")
         df = pd.read_parquet(DATA_PROC / f"hospital_{hospital}.parquet")
         df = df.drop(columns=drop, errors="ignore")
-
-        # Sort by patient then time — required for carry-forward to
-        # flow values forward in time within each patient's stay.
-        # reset_index gives clean 0,1,2... index after sort so
-        # subsequent operations don't get confused by shuffled labels.
         df = df.sort_values([pid, "ICULOS"]).reset_index(drop=True)
 
         # Pass 1: carry-forward within each patient
