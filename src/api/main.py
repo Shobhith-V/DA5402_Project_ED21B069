@@ -191,6 +191,52 @@ def ready():
         raise HTTPException(status_code=503, detail="Model not loaded")
     return {"status": "ready", "model": "sepsis-watch-classifier"}
 
+@app.get("/patients", tags=["inference"])
+def get_patients(limit: int = 10000):
+    """
+    Returns the most recently scored patients from the prediction log.
+    Frontend polls this to show real Hospital B patients.
+    """
+    if not PRED_LOG.exists():
+        return {"patients": []}
+
+    try:
+        lines   = PRED_LOG.read_text().strip().split("\n")
+        entries = [json.loads(l) for l in lines if l.strip()]
+
+        # Get latest entry per patient
+        latest = {}
+        for e in entries:
+            pid = e["patient_id"]
+            if pid not in latest or e["timestamp"] > latest[pid]["timestamp"]:
+                latest[pid] = e
+
+        patients = sorted(
+            latest.values(),
+            key=lambda x: x["timestamp"],
+            reverse=True
+        )[:limit]
+
+        return {
+            "patients": [
+                {
+                    "patient_id":  p["patient_id"],
+                    "risk_score":  p["risk_score"],
+                    "risk_tier":   p["risk_tier"],
+                    "flagged":     p["risk_score"] >= 0.3,
+                    "top_features": [],
+                    "timestamp":   p["timestamp"],
+                    "features":    {
+                        k: v for k, v in p.get("features", {}).items()
+                        if k in CFG["vital_cols"]
+                    }
+                }
+                for p in patients
+            ]
+        }
+    except Exception as e:
+        log.error(f"Error reading patients: {e}")
+        return {"patients": []}
 
 # ── Prediction ─────────────────────────────────────────────────────
 @app.post("/predict", response_model=PredictionResponse, tags=["inference"])
@@ -400,10 +446,78 @@ def drift_check():
     except Exception as e:
         log.error(f"Drift check error: {e}")
 
+def check_retrain_trigger():
+    """
+    Automatically triggers retraining when:
+    - Confirmed pool >= 1000 rows AND
+    - Rolling recall < 0.85 (model degrading)
+    Runs every 2 minutes.
+    """
+    try:
+        # Check pool size first
+        if not POOL_PATH.exists():
+            return
+
+        pool = pd.read_parquet(POOL_PATH)
+        if len(pool) < CFG["min_confirmed_pool_for_retrain"]:
+            log.info(
+                f"Retrain check: pool {len(pool)} < "
+                f"{CFG['min_confirmed_pool_for_retrain']} — skipping"
+            )
+            return
+
+        # Check recall from prediction log
+        if not PRED_LOG.exists():
+            return
+
+        lines    = PRED_LOG.read_text().strip().split("\n")
+        entries  = [json.loads(l) for l in lines if l.strip()]
+        labelled = [e for e in entries if e.get("sepsis_label") is not None]
+
+        if len(labelled) < 50:
+            return
+
+        window = labelled[-1000:]
+        y_true = np.array([e["sepsis_label"] for e in window])
+        y_pred = np.array([1 if e["risk_score"] >= 0.3 else 0 for e in window])
+
+        tp     = np.sum((y_pred == 1) & (y_true == 1))
+        fn     = np.sum((y_pred == 0) & (y_true == 1))
+        recall = tp / max(tp + fn, 1)
+
+        log.info(f"Retrain check: pool={len(pool)} recall={recall:.3f}")
+
+        if recall < CFG["recall_alert_threshold"]:
+            log.warning(
+                f"Recall {recall:.3f} below {CFG['recall_alert_threshold']} "
+                f"— triggering auto-retrain"
+            )
+
+            import subprocess
+            result = subprocess.run(
+                ["python", "src/training/retrain.py"],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+
+            if result.returncode == 0:
+                log.info("Auto-retrain completed — reloading model")
+                RETRAINING_TRIGGERED.labels(outcome="promoted").inc()
+                # Reload the model
+                load_model()
+            else:
+                log.error(f"Auto-retrain failed:\n{result.stderr}")
+                RETRAINING_TRIGGERED.labels(outcome="failed").inc()
+
+    except Exception as e:
+        log.error(f"Retrain trigger error: {e}")
 
 def start_background_jobs():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(feedback_loop, "interval", minutes=5,  id="feedback")
-    scheduler.add_job(drift_check,   "interval", minutes=10, id="drift")
+    scheduler.add_job(feedback_loop,         "interval", minutes=5,  id="feedback")
+    scheduler.add_job(drift_check,           "interval", minutes=10, id="drift")
+    scheduler.add_job(check_retrain_trigger, "interval", minutes=2,  id="retrain_check")
     scheduler.start()
-    log.info("Background jobs started")
+    log.info("Background jobs: feedback(5m), drift(10m), retrain_check(2m)")

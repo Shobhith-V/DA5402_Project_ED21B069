@@ -48,6 +48,9 @@ services:
       - "5000:5000"
     volumes:
       - ./mlruns:/mlruns
+    environment:
+      - MLFLOW_FLASK_SERVER_SECRET_KEY=sepsiswatch2024
+      - MLFLOW_ALLOWED_HOSTS=mlflow,localhost,127.0.0.1,0.0.0.0,*
     command: >
       mlflow server
       --host 0.0.0.0
@@ -56,6 +59,7 @@ services:
       --default-artifact-root mlflow-artifacts:/
       --artifacts-destination /mlruns/artifacts
       --serve-artifacts
+      --allowed-hosts "*"
     networks:
       - sepsis-net
     healthcheck:
