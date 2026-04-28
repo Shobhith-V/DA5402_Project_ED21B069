@@ -1,0 +1,73 @@
+# monitoring/alert_rules.yml
+groups:
+  - name: sepsis_watch_alerts
+    rules:
+
+      # ── Model recall degradation ───────────────────────────
+      - alert: ModelRecallDegraded
+        expr: model_rolling_recall < 0.85
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Model recall below threshold"
+          description: >
+            Rolling recall has been below 0.85 for 5 minutes.
+            Current value: {{ $value | humanizePercentage }}.
+            The model is missing real sepsis cases.
+            Retraining will trigger automatically.
+
+      # ── Feature drift detected ─────────────────────────────
+      - alert: FeatureDriftDetected
+        expr: drift_ks_pvalue < 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature drift detected: {{ $labels.feature }}"
+          description: >
+            KS test p-value for {{ $labels.feature }} is {{ $value }},
+            below the 0.05 threshold. Incoming Hospital B distribution
+            differs from Hospital A training distribution.
+
+      # ── High flag rate (alarm fatigue) ────────────────────
+      - alert: HighFlagRate
+        expr: >
+          rate(sepsis_predictions_total{risk_tier="high"}[10m])
+          /
+          rate(sepsis_predictions_total[10m])
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High anomaly flag rate — alarm fatigue risk"
+          description: >
+            More than 5% of predictions flagged as high risk.
+            Current rate: {{ $value | humanizePercentage }}.
+            Risk of alarm fatigue in clinical staff.
+
+      # ── API down ───────────────────────────────────────────
+      - alert: APIDown
+        expr: up{job="sepsis-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SepsisWatch API is down"
+          description: "The FastAPI inference service is not responding."
+
+      # ── High inference latency ─────────────────────────────
+      - alert: HighInferenceLatency
+        expr: >
+          histogram_quantile(0.95,
+            rate(model_inference_latency_seconds_bucket[5m])
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inference latency p95 exceeds 200ms SLA"
+          description: >
+            p95 inference latency is {{ $value | humanizeDuration }},
+            above the 200ms business metric target.
