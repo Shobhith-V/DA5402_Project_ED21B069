@@ -1,12 +1,12 @@
-# SepsisWatch — ICU Sepsis Early Warning System
+# SepsisWatch - ICU Sepsis Early Warning System
 
-This repo consists of all the codes for the DA5402 (ML Operations Lab) project. This project is a production-ready MLOps system for sepsis early detection in ICU patients. Sepsis affects 48 million people annually and kills 11 million — every hour of delayed treatment increases mortality by 7%. SepsisWatch predicts sepsis 6 hours before clinical recognition, monitors its own performance in real time, and automatically retrains when performance degrades due to cross-hospital data drift.
+This repo consists of all the codes for the DA5402 (ML Operations Lab) project. This project is a production-ready MLOps system for sepsis early detection in ICU patients. Sepsis affects 48 million people annually and kills 11 million -every hour of delayed treatment increases mortality by 7%. SepsisWatch predicts sepsis 6 hours before clinical recognition, monitors its own performance in real time, and automatically retrains when performance degrades due to cross-hospital data drift.
 
 ---
 
 ## Problem Statement
 
-The model is trained on Hospital A (Beth Israel Deaconess, Boston) and deployed against Hospital B (Emory University, Atlanta). This gives natural cross-hospital distributional drift — confirmed on day 1 via KS test (p≈0 on all 7 vital signs) — without any artificial injection. The system detects this drift, monitors recall degradation, and triggers automated retraining.
+The model is trained on Hospital A (Beth Israel Deaconess, Boston) and deployed against Hospital B (Emory University, Atlanta). This gives natural cross-hospital distributional drift -confirmed on day 1 via KS test (p≈0 on all 7 vital signs) -without any artificial injection. The system detects this drift, monitors recall degradation, and triggers automated retraining.
 
 ---
 
@@ -35,8 +35,8 @@ The model is trained on Hospital A (Beth Israel Deaconess, Boston) and deployed 
 
 | Metric | Value |
 |--------|-------|
-| Training hospital | Hospital A — 20,336 patients, 790,215 rows |
-| Production hospital | Hospital B — 20,000 patients, 761,995 rows |
+| Training hospital | Hospital A -20,336 patients, 790,215 rows |
+| Production hospital | Hospital B -20,000 patients, 761,995 rows |
 | Features | 77 (vitals + rolling stats + missingness indicators) |
 | Class imbalance | 45.1:1 (row-level) |
 | AUROC | 0.7546 |
@@ -155,7 +155,7 @@ and lab missingness indicators.
 ### 5. Start MLflow and train
 
 ```bash
-# Terminal 1 — start MLflow server
+# Terminal 1 -start MLflow server
 mlflow server \
   --host 0.0.0.0 \
   --port 5000 \
@@ -165,7 +165,7 @@ mlflow server \
   --serve-artifacts \
   --allowed-hosts "*"
 
-# Terminal 2 — run training
+# Terminal 2 -run training
 python src/training/train.py
 ```
 
@@ -197,11 +197,11 @@ docker compose ps
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Frontend | http://localhost:3000 | — |
-| FastAPI docs | http://localhost:8000/docs | — |
-| MLflow | http://localhost:5000 | — |
+| Frontend | http://localhost:3000 | -|
+| FastAPI docs | http://localhost:8000/docs | -|
+| MLflow | http://localhost:5000 | -|
 | Airflow | http://localhost:8080 | admin / admin |
-| Prometheus | http://localhost:9090 | — |
+| Prometheus | http://localhost:9090 | -|
 | Grafana | http://localhost:3001 | admin / admin |
 
 ### 7. Run the Hospital B replay
@@ -288,11 +288,11 @@ Alert rules fire when:
 
 Three-screen clinical dashboard at http://localhost:3000:
 
-- **Ward Monitor** — patient grid sorted by risk score, real-time updates every 10s, search and filter
-- **Patient Detail** — vital sign gauges, risk trajectory chart, top contributing features, clinical summary
-- **Model Health** — MLOps lifecycle diagram, drift p-values, performance history, system event log
+- **Ward Monitor** -patient grid sorted by risk score, real-time updates every 10s, search and filter
+- **Patient Detail** -vital sign gauges, risk trajectory chart, top contributing features, clinical summary
+- **Model Health** -MLOps lifecycle diagram, drift p-values, performance history, system event log
 
-The frontend connects to FastAPI exclusively via REST. No direct model or database access — satisfying the loose coupling requirement.
+The frontend connects to FastAPI exclusively via REST. No direct model or database access -satisfying the loose coupling requirement.
 
 ---
 
@@ -334,7 +334,7 @@ Hospital B serves as the validation set. A model that generalises to a different
 The last recorded vital sign is the most clinically relevant estimate of the current value. Imputation means are computed from Hospital A only to prevent data leakage from Hospital B into the reference distribution.
 
 **Why KS test for drift detection**
-Non-parametric — makes no assumptions about distribution shape. Per-feature testing gives actionable named alerts. Two features must drift simultaneously to confirm — this addresses the multiple comparisons problem (30% false positive rate with a single-feature threshold at α=0.05).
+Non-parametric -makes no assumptions about distribution shape. Per-feature testing gives actionable named alerts. Two features must drift simultaneously to confirm -this addresses the multiple comparisons problem (30% false positive rate with a single-feature threshold at α=0.05).
 
 **Why Airflow over Spark**
 The 42MB PhysioNet dataset does not warrant distributed computing. Airflow provides orchestration, retry logic, task dependency management, and a visual DAG without JVM overhead.
@@ -382,6 +382,6 @@ python src/pipeline/replay.py --fast --n-patients 1000
 
 ## Author
 
-**Shobhith Vadlamudi** — ED21B069  
+**Shobhith Vadlamudi** -ED21B069  
 DA5402 Machine Learning Operations  
 Indian Institute of Technology Madras
