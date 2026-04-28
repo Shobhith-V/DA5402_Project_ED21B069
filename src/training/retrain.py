@@ -346,5 +346,7 @@ def retrain():
         return outcome, run.info.run_id
 
 if __name__ == "__main__":
+
+    
     outcome, run_id = retrain()
     print(f"\nOutcome: {outcome}  Run ID: {run_id}")

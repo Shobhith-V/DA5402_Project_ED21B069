@@ -68,7 +68,7 @@ with open(BASELINE / "hospital_a_baseline.json") as f:
 
 # ── Patient history buffer ─────────────────────────────────────────
 # With history, model gets the temporal patterns it was trained on.
-# we are storing 6 rows because thats 6 hours of data which was the design choice 
+# we are storing 6 rows because thats 6 hours of data which was the design choice
 _patient_history = defaultdict(lambda: deque(maxlen=6))
 
 # ── Prometheus metrics ─────────────────────────────────────────────
@@ -137,6 +137,7 @@ app = FastAPI(
     description="Sepsis early-warning — real-time ICU risk scoring",
     version="1.0.0",
 )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -389,8 +390,8 @@ def feedback_loop():
 
 
 def drift_check():
-
-    # KS test on rolling window of incoming features vs Hospital A baseline. An alert is fired when 2+ features show drift. This runs every 10 minutes.
+    # KS test on rolling window of incoming features vs Hospital A baseline.
+    # An alert is fired when 2+ features show drift. This runs every 10 minutes.
     try:
         if not PRED_LOG.exists():
             return
@@ -433,12 +434,16 @@ def drift_check():
     except Exception as e:
         log.error(f"Drift check error: {e}")
 
+
+
 import time as _time
 _retrain_last_time = 0.0
 
 def check_retrain_trigger():
 
-    # This function checks if retraining conditions are met and triggers retraining if so. It uses a cooldown to avoid too frequent retraining. It checks the size of the confirmed pool and the rolling recall metric to decide whether to retrain.
+    # This function checks if retraining conditions are met and triggers retraining if so.
+    # It uses a cooldown to avoid too frequent retraining. It checks the size of the confirmed pool
+    # and the rolling recall metric to decide whether to retrain.
     global _retrain_last_time
     try:
         # Cooldown — don't retrain more than once per 10 minutes
