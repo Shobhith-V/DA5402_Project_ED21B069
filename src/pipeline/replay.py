@@ -55,7 +55,7 @@ def check_api_ready(max_retries=15):
     return False
 
 
-def replay(fast=False, n_patients=None):
+def replay(fast=False, n_patients=None, start_patient=0):
     # Load pre-engineered Hospital B features
     # This file has all 77 features the model expects:
     # raw vitals + rolling stats + missingness indicators
@@ -70,8 +70,11 @@ def replay(fast=False, n_patients=None):
     target  = CFG["target_col"]
 
     patients = df[pid_col].unique()
+    patients = patients[start_patient:]      # skip already-replayed patients
     if n_patients:
         patients = patients[:n_patients]
+
+    log.info(f"Starting from patient index {start_patient}")
 
     log.info(f"Replaying {len(patients):,} Hospital B patients")
     log.info(f"Features per row: {len(FEATURE_COLS)}")
@@ -151,11 +154,13 @@ def replay(fast=False, n_patients=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fast",       action="store_true")
-    parser.add_argument("--n-patients", type=int, default=None)
+    parser.add_argument("--fast",          action="store_true")
+    parser.add_argument("--n-patients",    type=int, default=None)
+    parser.add_argument("--start-patient", type=int, default=0,
+                        help="Start from this patient index (0-based)")
     args = parser.parse_args()
 
     if not check_api_ready():
         exit(1)
 
-    replay(fast=args.fast, n_patients=args.n_patients)
+    replay(fast=args.fast, n_patients=args.n_patients, start_patient=args.start_patient)

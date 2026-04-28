@@ -1,0 +1,5 @@
+outs:
+- md5: 1cb440f3509870b1c4ba323358ff354d
+  size: 24684
+  hash: md5
+  path: verification.py

@@ -37,6 +37,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 from scipy import stats
 from starlette.responses import Response
+import mlflow
+import mlflow.xgboost
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,19 +123,14 @@ _model_ready = False
 def load_model():
     global _model, _model_ready
     try:
-        model_path = BASELINE / "model_local.json"
-        if not model_path.exists():
-            log.error(f"Model not found at {model_path}")
-            log.error("Run src/training/train.py first")
-            return
-        _model = xgb.XGBClassifier()
-        _model.load_model(str(model_path))
+        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"))
+        model_uri = "models:/sepsis-watch-classifier/Production"
+        _model = mlflow.xgboost.load_model(model_uri)
         _model_ready = True
-        log.info(f"Model loaded from {model_path}")
+        log.info(f"Model loaded from MLflow registry: {model_uri}")
     except Exception as e:
-        log.error(f"Model load failed: {e}")
+        log.error(f"MLflow load failed: {e}")
         _model_ready = False
-
 
 # ── FastAPI app ────────────────────────────────────────────────────
 app = FastAPI(
@@ -353,7 +350,7 @@ def feedback_loop():
         if len(labelled) < 50:
             return
 
-        window = labelled[-1000:]
+        window = labelled[-5000:]
         y_true = np.array([e["sepsis_label"] for e in window])
         y_pred = np.array([1 if e["risk_score"] >= 0.3 else 0 for e in window])
 
@@ -369,7 +366,7 @@ def feedback_loop():
 
         # Append to confirmed pool for retraining
         new_rows = []
-        for e in labelled[-100:]:
+        for e in labelled[-500:]:
             row = e["features"].copy()
             row["patient_id"]  = e["patient_id"]
             row["SepsisLabel"] = e["sepsis_label"]
@@ -446,14 +443,25 @@ def drift_check():
     except Exception as e:
         log.error(f"Drift check error: {e}")
 
+import time as _time
+_retrain_last_time = 0.0
+
 def check_retrain_trigger():
     """
     Automatically triggers retraining when:
     - Confirmed pool >= 1000 rows AND
     - Rolling recall < 0.85 (model degrading)
     Runs every 2 minutes.
+    Cooldown: 10 minutes between retrains.
     """
+    global _retrain_last_time
     try:
+        # Cooldown — don't retrain more than once per 10 minutes
+        if _time.time() - _retrain_last_time < 600:
+            remaining = int(600 - (_time.time() - _retrain_last_time))
+            log.info(f"Retrain cooldown active — {remaining}s remaining")
+            return
+
         # Check pool size first
         if not POOL_PATH.exists():
             return
@@ -477,7 +485,7 @@ def check_retrain_trigger():
         if len(labelled) < 50:
             return
 
-        window = labelled[-1000:]
+        window = labelled[-5000:]
         y_true = np.array([e["sepsis_label"] for e in window])
         y_pred = np.array([1 if e["risk_score"] >= 0.3 else 0 for e in window])
 
@@ -505,15 +513,24 @@ def check_retrain_trigger():
             if result.returncode == 0:
                 log.info("Auto-retrain completed — reloading model")
                 RETRAINING_TRIGGERED.labels(outcome="promoted").inc()
-                # Reload the model
+
+                # Set cooldown timestamp
+                _retrain_last_time = _time.time()
+
+                # Clear prediction log so recall resets with new model
+                if PRED_LOG.exists():
+                    PRED_LOG.unlink()
+                    log.info("Prediction log cleared — recall resets on next predictions")
+
+                # Reload model from MLflow registry
                 load_model()
+
             else:
                 log.error(f"Auto-retrain failed:\n{result.stderr}")
                 RETRAINING_TRIGGERED.labels(outcome="failed").inc()
 
     except Exception as e:
         log.error(f"Retrain trigger error: {e}")
-
 def start_background_jobs():
     scheduler = BackgroundScheduler()
     scheduler.add_job(feedback_loop,         "interval", minutes=5,  id="feedback")

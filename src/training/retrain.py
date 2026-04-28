@@ -209,8 +209,6 @@ def retrain():
     X_holdout, y_holdout = load_holdout_data(cfg, feat_cols)
 
     # Recompute scale_pos_weight on combined data
-    # Critical — the imbalance ratio changes when Hospital B data
-    # is added because B has a different sepsis prevalence (5.7% vs 8.8%)
     n_neg = (y_train == 0).sum()
     n_pos = (y_train == 1).sum()
     scale_pos_weight = round(float(n_neg / max(n_pos, 1)), 2)
@@ -232,19 +230,20 @@ def retrain():
     }
 
     pool_size = len(pool) if pool is not None else 0
-    run_name = f"retrain-HospA+B-pool{pool_size}-{git_hash[:6]}"
+    run_name  = f"retrain-HospA+B-pool{pool_size}-{git_hash[:6]}"
+
     with mlflow.start_run(run_name=run_name) as run:
 
-        # Log params
+        # ── Log parameters ────────────────────────────────────
         mlflow.log_params(params)
-        mlflow.log_param("git_commit",        git_hash)
-        mlflow.log_param("run_type",          "retrain")
-        mlflow.log_param("hospital_train",    "A+B")
-        mlflow.log_param("n_train_rows",      len(X_train))
-        mlflow.log_param("n_pool_rows",       len(pool) if pool is not None else 0)
-        mlflow.log_param("current_auroc",     current_auroc)
+        mlflow.log_param("git_commit",     git_hash)
+        mlflow.log_param("run_type",       "retrain")
+        mlflow.log_param("hospital_train", "A+B")
+        mlflow.log_param("n_train_rows",   len(X_train))
+        mlflow.log_param("n_pool_rows",    pool_size)
+        mlflow.log_param("current_auroc",  current_auroc)
 
-        # Train
+        # ── Train ─────────────────────────────────────────────
         log.info("Training XGBoost on combined data...")
         model = xgb.XGBClassifier(**params)
         model.fit(
@@ -253,7 +252,7 @@ def retrain():
             verbose=100,
         )
 
-        # Evaluate on held-out set
+        # ── Evaluate ──────────────────────────────────────────
         y_prob    = model.predict_proba(X_holdout)[:, 1]
         y_pred_30 = (y_prob >= 0.3).astype(int)
 
@@ -264,11 +263,11 @@ def retrain():
             y_holdout, y_pred_30, output_dict=True
         )
 
-        log.info(f"New model AUROC:    {new_auroc:.4f}")
-        log.info(f"Current model AUROC:{current_auroc:.4f}")
-        log.info(f"New model recall:   {report['1']['recall']:.4f}")
+        log.info(f"New model AUROC:     {new_auroc:.4f}")
+        log.info(f"Current model AUROC: {current_auroc:.4f}")
+        log.info(f"New model recall:    {report['1']['recall']:.4f}")
 
-        # Log metrics
+        # ── Log metrics ───────────────────────────────────────
         mlflow.log_metric("auroc",          new_auroc)
         mlflow.log_metric("auprc",          new_auprc)
         mlflow.log_metric("utility_score",  new_utility)
@@ -277,62 +276,58 @@ def retrain():
         mlflow.log_metric("current_auroc",  current_auroc)
         mlflow.log_metric("auroc_delta",    new_auroc - current_auroc)
 
-  
+        # ── Log model to MLflow registry (proper format) ──────
+        # Using mlflow.xgboost.log_model instead of log_artifact
+        # This saves the full MLmodel format required for
+        # mlflow.xgboost.load_model to work correctly
+        mlflow.xgboost.log_model(
+            model,
+            artifact_path="model",
+            registered_model_name=MODEL_NAME,
+        )
+
+        # Also save locally as fallback
         model.save_model(str(BASELINE / "model_local.json"))
-        mlflow.log_artifact(str(BASELINE / "model_local.json"), "model")
+        log.info("Model saved locally to model_local.json")
 
-        # Register in model registry
-        model_uri = f"runs:/{run.info.run_id}/model"
-        try:
-            client = mlflow.MlflowClient()
-            mv = client.create_model_version(
-                name=MODEL_NAME,
-                source=f"{run.info.artifact_uri}/model",
-                run_id=run.info.run_id,
-            )
-            new_version = mv.version
-            log.info(f"Model registered as version {new_version}")
-        except Exception as e:
-            log.warning(f"Registry failed: {e} — model saved locally")
-            new_version = None
-
-        # Promotion decision
-        # New model must beat current by at least 0.001 AUROC
-        # Small threshold prevents noise-driven promotion
+        # ── Promotion decision ────────────────────────────────
+        # New model must match or beat current AUROC
         if new_auroc >= current_auroc - 0.001:
-            # Promote new model to Production
+
             client = mlflow.MlflowClient()
-            versions = client.get_latest_versions(
-                MODEL_NAME, stages=["None", "Staging"]
-            )
-            new_version = max(versions, key=lambda v: int(v.version)).version
 
-            # Archive current Production
-            prod_versions = client.get_latest_versions(
-                MODEL_NAME, stages=["Production"]
+            # Get the version just registered (highest version number)
+            versions = client.search_model_versions(
+                f"name='{MODEL_NAME}'"
             )
-            for v in prod_versions:
-                client.transition_model_version_stage(
-                    name=MODEL_NAME,
-                    version=v.version,
-                    stage="Archived"
+            new_version = max(
+                versions, key=lambda v: int(v.version)
+            ).version
+
+            # Archive current Production versions
+            try:
+                prod_versions = client.get_latest_versions(
+                    MODEL_NAME, stages=["Production"]
                 )
-                log.info(f"Archived version {v.version}")
+                for v in prod_versions:
+                    client.transition_model_version_stage(
+                        name=MODEL_NAME,
+                        version=v.version,
+                        stage="Archived"
+                    )
+                    log.info(f"Archived version {v.version}")
+            except Exception as e:
+                log.warning(f"Could not archive old versions: {e}")
 
-            # Promote new version
+            # Promote new version to Production
             client.transition_model_version_stage(
                 name=MODEL_NAME,
                 version=new_version,
                 stage="Production"
             )
 
-            # Save new model locally for API
-            model.save_model(str(BASELINE / "model_local.json"))
-
             mlflow.log_param("promotion_outcome", "promoted")
             log.info(f"Version {new_version} promoted to Production")
-            log.info("model_local.json updated — restart API to load new model")
-
             outcome = "promoted"
 
         else:
@@ -349,7 +344,6 @@ def retrain():
         log.info("=" * 60)
 
         return outcome, run.info.run_id
-
 
 if __name__ == "__main__":
     outcome, run_id = retrain()

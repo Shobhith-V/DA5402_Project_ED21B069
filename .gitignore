@@ -28,3 +28,4 @@ mlruns/
 
 # Logs
 *.log
+/verification.py
